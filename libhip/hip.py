@@ -64,12 +64,14 @@ def _parse_palette(hip_contents, palette_size):
         # Note that we drop the last byte as it is probably an Alpha channel that we don't care about.
         color = palette_data[0:HIP_PAL_CHUNK_SIZE]
         palette_data = palette_data[HIP_PAL_CHUNK_SIZE + 1:]
-        palette += color[::-1]
+        palette += color
 
+    # Transpose the palette so it works with HPL files.
+    palette = palette[::-1]
     return palette, remaining
 
 
-def _parse_image_data(hip_contents, width, height, image_fp):
+def _parse_image_data(hip_contents, num_colors, width, height, image_fp):
     """
     Parse the image data of our HIP file and write the data into our PNG palette image.
     """
@@ -81,7 +83,10 @@ def _parse_image_data(hip_contents, width, height, image_fp):
 
     while remaining:
         # Color palette index we are currently working with.
-        palette_index = remaining[0]
+        # We subtract our "palette index" from the number of colors as we transposed the palette
+        # as it exists in the HIP file so it is compatible with HPL files.
+        # We need to subtract 1 from the index as a palette index ranges from 0 to num_colors-1.
+        palette_index = num_colors - remaining[0] - 1
         # The number of pixels to draw using the given color.
         num_pixels = remaining[1]
 
@@ -117,10 +122,10 @@ def extract_img(hip_path):
     with open(hip_path, "rb") as hip_fp:
         hip_contents = hip_fp.read()
 
-    _, __, palette_size, width, height, remaining = _parse_header(hip_contents)
+    num_colors, _, palette_size, width, height, remaining = _parse_header(hip_contents)
     palette, remaining = _parse_palette(remaining, palette_size)
 
     with Image.new("P", (width, height)) as image_fp:
         image_fp.putpalette(palette)
-        _parse_image_data(remaining, width, height, image_fp)
+        _parse_image_data(remaining, num_colors, width, height, image_fp)
         image_fp.save(out)

@@ -8,7 +8,6 @@ HIP_PAL_CHUNK_SIZE = 3
 HIP_IMG_CHUNK_SIZE = 2
 
 HIP_NUM_COLORS_INDEX = 2
-HIP_PALETTE_BYTE_SIZE_INDEX = 3
 HIP_COLOR_DEPTH_INDEX = 6
 HIP_IMG_WIDTH_INDEX = 7
 HIP_IMG_HEIGHT_INDEX = 8
@@ -39,7 +38,7 @@ def _parse_header(hip_contents):
     # Grab important info our of the header.
     # Note that not all of it is currently used in this script but we grab it anyway.
     num_colors = data[HIP_NUM_COLORS_INDEX]
-    palette_size = data[HIP_PALETTE_BYTE_SIZE_INDEX]
+    palette_size = num_colors * 4
     color_depth = data[HIP_COLOR_DEPTH_INDEX] / 4
     width = data[HIP_IMG_WIDTH_INDEX]
     height = data[HIP_IMG_HEIGHT_INDEX]
@@ -88,6 +87,11 @@ def _parse_image_data(hip_contents, width, height, image_fp):
 
         # Draw our pixels in our PNG image one at a time. Painstaking, yes, but it works.
         for _ in range(num_pixels):
+            # Ensure we are not attempting to create an invalid image.
+            # We do not check against the width here as we use modular math to limit the x values.
+            if y >= height:
+                raise ValueError("Cannot exceed image height!")
+
             # We do not set the pixel value to a color, but rather to the color palette index.
             # The color will be set correctly from the palette.
             image_fp.putpixel((x, y), palette_index)
@@ -98,9 +102,6 @@ def _parse_image_data(hip_contents, width, height, image_fp):
             # Once we have filled a row of length `width` we move to the next row.
             if x == 0:
                 y += 1
-                # Ensure we are not attempting to create an invalid image.
-                if y > height:
-                    raise ValueError("Cannot exceed image height!")
 
         remaining = remaining[HIP_IMG_CHUNK_SIZE:]
 

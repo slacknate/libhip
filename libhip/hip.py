@@ -113,7 +113,7 @@ def _parse_image_data(hip_contents, num_colors, width, height, image_fp):
         remaining = remaining[HIP_IMG_CHUNK_SIZE:]
 
 
-def extract_img(hip_image, out=None):
+def convert_from_hip(hip_image, out=None):
     """
     Extract an image from a HIP file and save it as a PNG palette image.
 

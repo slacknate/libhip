@@ -1,1 +1,1 @@
-from .hip import extract_img
+from .hip import convert_from_hip

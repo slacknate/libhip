@@ -1,7 +1,7 @@
 import os
 import argparse
 
-from .hip import extract_img
+from .hip import convert_from_hip
 
 
 def abs_path(value):
@@ -17,15 +17,15 @@ def main():
     parser = argparse.ArgumentParser("hip")
     subparsers = parser.add_subparsers(title="commands")
 
-    extract = subparsers.add_parser("extract")
-    extract.add_argument(dest="hip_path", type=abs_path, help="HIP file input path.")
+    topng = subparsers.add_parser("topng")
+    topng.add_argument(dest="hip_path", type=abs_path, help="HIP file input path.")
 
     args, _ = parser.parse_known_args()
 
     hip_path = getattr(args, "hip_path", None)
 
     if hip_path is not None:
-        extract_img(hip_path)
+        convert_from_hip(hip_path)
 
 
 if __name__ == "__main__":

@@ -1,3 +1,5 @@
+import io
+import os
 import struct
 
 from PIL import Image
@@ -111,16 +113,27 @@ def _parse_image_data(hip_contents, num_colors, width, height, image_fp):
         remaining = remaining[HIP_IMG_CHUNK_SIZE:]
 
 
-def extract_img(hip_path):
+def extract_img(hip_image, out=None):
     """
     Extract an image from a HIP file and save it as a PNG palette image.
 
     Reference: https://github.com/dantarion/bbtools/blob/master/extractHip.py
     """
-    out = hip_path.replace(".hip", ".png")
+    if out is None:
+        if not isinstance(hip_image, str):
+            raise ValueError("Must provide an output path or fp when not supplying HIP image via file path!")
 
-    with open(hip_path, "rb") as hip_fp:
-        hip_contents = hip_fp.read()
+        out = hip_image.replace(".hip", ".png")
+
+    if isinstance(hip_image, str) and os.path.exists(hip_image):
+        with open(hip_image, "rb") as hip_fp:
+            hip_contents = hip_fp.read()
+
+    elif isinstance(hip_image, io.BytesIO):
+        hip_contents = hip_image.read()
+
+    else:
+        raise TypeError(f"Unsupported HIP image type {hip_image}!")
 
     num_colors, _, palette_size, width, height, remaining = _parse_header(hip_contents)
     palette, remaining = _parse_palette(remaining, palette_size)
@@ -128,4 +141,4 @@ def extract_img(hip_path):
     with Image.new("P", (width, height)) as image_fp:
         image_fp.putpalette(palette)
         _parse_image_data(remaining, num_colors, width, height, image_fp)
-        image_fp.save(out)
+        image_fp.save(out, format="PNG")

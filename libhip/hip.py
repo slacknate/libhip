@@ -6,7 +6,9 @@ from PIL import Image
 
 HIP_PREFIX = b"HIP\x00"
 
-HIP_PAL_CHUNK_SIZE = 3
+RAW_A_SIZE = 1
+RAW_RGB_SIZE = 3
+
 HIP_IMG_CHUNK_SIZE = 2
 
 HIP_NUM_COLORS_INDEX = 2
@@ -55,22 +57,29 @@ def _parse_header(hip_contents):
 def _parse_palette(hip_contents, palette_size):
     """
     Parse the palette data from the HIP file and create a raw palette that Pillow can work with.
+    Separate the RGB and Alpha channels as we cannot create a palette image with an alpha channel
+    in the palette data. The transparency information needs to be included in a tRNS header.
     """
-    palette = b""
+    palette_data = bytearray()
+    alpha_data = bytearray()
 
-    palette_data = hip_contents[:palette_size]
-    remaining = hip_contents[palette_size:]
+    remaining = hip_contents[:palette_size]
 
-    while palette_data:
-        # Read the palette data in chunks of four bytes.
-        # Note that we drop the last byte as it is probably an Alpha channel that we don't care about.
-        color = palette_data[0:HIP_PAL_CHUNK_SIZE]
-        palette_data = palette_data[HIP_PAL_CHUNK_SIZE + 1:]
-        palette += color
+    while remaining:
+        rgb = remaining[:RAW_RGB_SIZE]
+        remaining = remaining[RAW_RGB_SIZE:]
 
-    # Transpose the palette so it works with HPL files.
-    palette = palette[::-1]
-    return palette, remaining
+        alpha = remaining[:RAW_A_SIZE]
+        remaining = remaining[RAW_A_SIZE:]
+
+        palette_data += rgb
+        alpha_data += alpha
+
+    if len(palette_data) != len(alpha_data) * 3:
+        raise ValueError("Mismatch between RGB and transparency data!")
+
+    # Transpose the palette data so it works with HPL files.
+    return palette_data[::-1], alpha_data[::-1], hip_contents[palette_size:]
 
 
 def _parse_image_data(hip_contents, num_colors, image_fp):
@@ -125,9 +134,11 @@ def convert_from_hip(hip_image, out=None):
         raise TypeError(f"Unsupported HIP image type {hip_image}!")
 
     num_colors, _, palette_size, width, height, remaining = _parse_header(hip_contents)
-    palette, remaining = _parse_palette(remaining, palette_size)
+    palette, alpha, remaining = _parse_palette(remaining, palette_size)
 
     with Image.new("P", (width, height)) as image_fp:
         image_fp.putpalette(palette)
         _parse_image_data(remaining, num_colors, image_fp)
-        image_fp.save(out, format="PNG")
+        # Setting the transparency kwarg to our alpha raw data creates a tRNS header.
+        # The kwarg expects an instance of `bytes()`.
+        image_fp.save(out, format="PNG", transparency=bytes(alpha))

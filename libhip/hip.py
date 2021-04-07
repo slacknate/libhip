@@ -127,6 +127,9 @@ def convert_from_hip(hip_image, out=None):
         with open(hip_image, "rb") as hip_fp:
             hip_contents = hip_fp.read()
 
+    elif isinstance(hip_image, str) and not os.path.exists(hip_image):
+        raise ValueError(f"HIP image {hip_image} does not exist!")
+
     elif isinstance(hip_image, io.BytesIO):
         hip_contents = hip_image.read()
 

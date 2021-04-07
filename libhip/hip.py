@@ -73,15 +73,16 @@ def _parse_palette(hip_contents, palette_size):
     return palette, remaining
 
 
-def _parse_image_data(hip_contents, num_colors, width, height, image_fp):
+def _parse_image_data(hip_contents, num_colors, image_fp):
     """
     Parse the image data of our HIP file and write the data into our PNG palette image.
     """
     remaining = hip_contents
 
-    # Pixel coordinates.
-    x = 0
-    y = 0
+    # The Pillow Image.putdata() method expects an iterable of pixel values.
+    # Seemingly this can be any type of iterable of byte values, but we choose to construct a bytearray
+    # featuring the data extracted from the HIP file as a bytearray is memory efficient.
+    data = bytearray()
 
     while remaining:
         # Color palette index we are currently working with.
@@ -92,25 +93,13 @@ def _parse_image_data(hip_contents, num_colors, width, height, image_fp):
         # The number of pixels to draw using the given color.
         num_pixels = remaining[1]
 
-        # Draw our pixels in our PNG image one at a time. Painstaking, yes, but it works.
-        for _ in range(num_pixels):
-            # Ensure we are not attempting to create an invalid image.
-            # We do not check against the width here as we use modular math to limit the x values.
-            if y >= height:
-                raise ValueError("Cannot exceed image height!")
-
-            # We do not set the pixel value to a color, but rather to the color palette index.
-            # The color will be set correctly from the palette.
-            image_fp.putpixel((x, y), palette_index)
-
-            # Move to the next column in the row. Once we reach the end of the row we head back to column 0.
-            x += 1
-            x %= width
-            # Once we have filled a row of length `width` we move to the next row.
-            if x == 0:
-                y += 1
+        # Create  bytearray of length `palette_index` where each element is the value `palette_index` and
+        # append it to our total image data bytearray.
+        data += bytearray((palette_index,) * num_pixels)
 
         remaining = remaining[HIP_IMG_CHUNK_SIZE:]
+
+    image_fp.putdata(data)
 
 
 def convert_from_hip(hip_image, out=None):
@@ -140,5 +129,5 @@ def convert_from_hip(hip_image, out=None):
 
     with Image.new("P", (width, height)) as image_fp:
         image_fp.putpalette(palette)
-        _parse_image_data(remaining, num_colors, width, height, image_fp)
+        _parse_image_data(remaining, num_colors, image_fp)
         image_fp.save(out, format="PNG")

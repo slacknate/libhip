@@ -93,7 +93,7 @@ def _parse_image_data(hip_contents, num_colors, image_fp):
         # The number of pixels to draw using the given color.
         num_pixels = remaining[1]
 
-        # Create  bytearray of length `palette_index` where each element is the value `palette_index` and
+        # Create  bytearray of length `num_pixels` where each element is the value `palette_index` and
         # append it to our total image data bytearray.
         data += bytearray((palette_index,) * num_pixels)
 

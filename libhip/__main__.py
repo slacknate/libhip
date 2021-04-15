@@ -1,7 +1,7 @@
 import os
 import argparse
 
-from .hip import convert_from_hip
+from .hip import hip_to_png
 
 
 def abs_path(value):
@@ -25,7 +25,7 @@ def main():
     hip_path = getattr(args, "hip_path", None)
 
     if hip_path is not None:
-        convert_from_hip(hip_path)
+        hip_to_png(hip_path)
 
 
 if __name__ == "__main__":

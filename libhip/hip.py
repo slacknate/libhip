@@ -78,7 +78,7 @@ def _parse_palette(hip_contents, palette_size):
     if len(palette_data) != len(alpha_data) * 3:
         raise ValueError("Mismatch between RGB and transparency data!")
 
-    # Transpose the palette data so it works with HPL files.
+    # Transpose the palette data so it works with PNG palette images.
     return palette_data[::-1], alpha_data[::-1], hip_contents[palette_size:]
 
 
@@ -111,7 +111,7 @@ def _parse_image_data(hip_contents, num_colors, image_fp):
     image_fp.putdata(data)
 
 
-def convert_from_hip(hip_image, out=None):
+def hip_to_png(hip_image, out=None):
     """
     Extract an image from a HIP file and save it as a PNG palette image.
 

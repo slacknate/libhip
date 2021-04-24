@@ -9,12 +9,17 @@ HIP_PREFIX = b"HIP\x00"
 RAW_A_SIZE = 1
 RAW_RGB_SIZE = 3
 
-HIP_IMG_CHUNK_SIZE = 2
+HIP_PAL_IMG_CHUNK_SIZE = 2
+HIP_STD_IMG_CHUNK_SIZE = 5
 
+HIP_FILE_SIZE_INDEX = 1
 HIP_NUM_COLORS_INDEX = 2
-HIP_COLOR_DEPTH_INDEX = 6
-HIP_IMG_WIDTH_INDEX = 7
-HIP_IMG_HEIGHT_INDEX = 8
+
+HIP_PAL_IMG_WIDTH_INDEX = 0
+HIP_PAL_IMG_HEIGHT_INDEX = 1
+
+HIP_STD_IMG_WIDTH_INDEX = 3
+HIP_STD_IMG_HEIGHT_INDEX = 4
 
 
 def _unpack_from(fmt, data):
@@ -34,32 +39,42 @@ def _parse_header(hip_contents):
     We do basic validation of the header with the HIP_PREFIX constant.
     """
     if not hip_contents.startswith(HIP_PREFIX):
-        raise ValueError("Not valid HIP file!")
+        raise ValueError("Not valid HIP file! Missing HIP file header prefix!")
 
     remaining = hip_contents[len(HIP_PREFIX):]
-    data, remaining = _unpack_from("<IIIIIIIIIIIIIII", remaining)
+    header, remaining = _unpack_from("<IIIIIII", remaining)
+
+    hip_file_size = header[HIP_FILE_SIZE_INDEX]
+    if hip_file_size != len(hip_contents):
+        raise ValueError("Not valid HIP file! File size mismatch!")
 
     # Grab important info our of the header.
     # Note that not all of it is currently used in this script but we grab it anyway.
-    num_colors = data[HIP_NUM_COLORS_INDEX]
-    palette_size = num_colors * 4
-    color_depth = data[HIP_COLOR_DEPTH_INDEX] / 4
-    width = data[HIP_IMG_WIDTH_INDEX]
-    height = data[HIP_IMG_HEIGHT_INDEX]
+    num_colors = header[HIP_NUM_COLORS_INDEX]
 
-    if not color_depth.is_integer():
-        raise ValueError(f"Color depth of {color_depth} is invalid!")
+    # If a number of colors is called out then this HIP file represents a palette image.
+    # The pixel data described in this file are palette indices.
+    if num_colors:
+        palette_header, remaining = _unpack_from("<IIIIIIII", remaining)
+        width = palette_header[HIP_PAL_IMG_WIDTH_INDEX]
+        height = palette_header[HIP_PAL_IMG_HEIGHT_INDEX]
 
-    color_depth = int(color_depth)
-    return num_colors, color_depth, palette_size, width, height, remaining
+    # Otherwise this HIP file describes raw RGBA pixel data and we have no palette.
+    else:
+        width = header[HIP_STD_IMG_WIDTH_INDEX]
+        height = header[HIP_STD_IMG_HEIGHT_INDEX]
+
+    return num_colors, width, height, remaining
 
 
-def _parse_palette(hip_contents, palette_size):
+def _parse_palette(hip_contents, num_colors):
     """
     Parse the palette data from the HIP file and create a raw palette that Pillow can work with.
     Separate the RGB and Alpha channels as we cannot create a palette image with an alpha channel
     in the palette data. The transparency information needs to be included in a tRNS header.
     """
+    palette_size = num_colors * (RAW_RGB_SIZE + RAW_A_SIZE)
+
     palette_data = bytearray()
     alpha_data = bytearray()
 
@@ -82,9 +97,9 @@ def _parse_palette(hip_contents, palette_size):
     return palette_data[::-1], alpha_data[::-1], hip_contents[palette_size:]
 
 
-def _parse_image_data(hip_contents, num_colors, image_fp):
+def _parse_palette_image_data(hip_contents, num_colors):
     """
-    Parse the image data of our HIP file and write the data into our PNG palette image.
+    Parse the palette image data of our HIP file.
     """
     remaining = hip_contents
 
@@ -106,9 +121,66 @@ def _parse_image_data(hip_contents, num_colors, image_fp):
         # append it to our total image data bytearray.
         data += bytearray((palette_index,) * num_pixels)
 
-        remaining = remaining[HIP_IMG_CHUNK_SIZE:]
+        remaining = remaining[HIP_PAL_IMG_CHUNK_SIZE:]
 
-    image_fp.putdata(data)
+    return data
+
+
+def _parse_palette_image(num_colors, width, height, remaining, out):
+    """
+    Parse a HIP image that represents a PNG palette image.
+    """
+    palette, alpha, remaining = _parse_palette(remaining, num_colors)
+    image_data = _parse_palette_image_data(remaining, num_colors)
+
+    with Image.new("P", (width, height)) as image_fp:
+        image_fp.putpalette(palette)
+        image_fp.putdata(image_data)
+        # Setting the transparency kwarg to our alpha raw data creates a tRNS header.
+        # The kwarg expects an instance of `bytes()`.
+        image_fp.save(out, format="PNG", transparency=bytes(alpha))
+
+
+def _parse_standard_image_data(hip_contents):
+    """
+    Parse the raw RGBA image data from our HIP file.
+    """
+    remaining = hip_contents
+
+    # We are parsing raw RGBA data. PIL expects RGBA images to provide
+    # pixel data to the Image.putdata() method as RGBA tuples.
+    data = []
+
+    while remaining:
+        # ???.
+        color_data = remaining[:HIP_STD_IMG_CHUNK_SIZE]
+
+        # Note that HIP standard image files store there color data in the format BGRA.
+        bgr = color_data[:RAW_RGB_SIZE]
+        a = color_data[RAW_RGB_SIZE:RAW_RGB_SIZE+RAW_A_SIZE]
+        # The last byte of the chunk is the number of pixels that is the given color.
+        num_pixels = color_data[HIP_STD_IMG_CHUNK_SIZE-1]
+
+        # Convert our color from BGRA to RGBA.
+        rgba = tuple(bgr[::-1] + a)
+
+        # Extend our data with the number of pixels that are the given color.
+        data.extend([rgba] * num_pixels)
+
+        remaining = remaining[HIP_STD_IMG_CHUNK_SIZE:]
+
+    return data
+
+
+def _parse_standard_image(width, height, hip_contents, out):
+    """
+    Parse a HIP image that represents a PNG RGBA image.
+    """
+    image_data = _parse_standard_image_data(hip_contents)
+
+    with Image.new("RGBA", (width, height)) as image_fp:
+        image_fp.putdata(image_data)
+        image_fp.save(out, format="PNG")
 
 
 def hip_to_png(hip_image, out=None):
@@ -136,12 +208,10 @@ def hip_to_png(hip_image, out=None):
     else:
         raise TypeError(f"Unsupported HIP image type {hip_image}!")
 
-    num_colors, _, palette_size, width, height, remaining = _parse_header(hip_contents)
-    palette, alpha, remaining = _parse_palette(remaining, palette_size)
+    num_colors, width, height, remaining = _parse_header(hip_contents)
 
-    with Image.new("P", (width, height)) as image_fp:
-        image_fp.putpalette(palette)
-        _parse_image_data(remaining, num_colors, image_fp)
-        # Setting the transparency kwarg to our alpha raw data creates a tRNS header.
-        # The kwarg expects an instance of `bytes()`.
-        image_fp.save(out, format="PNG", transparency=bytes(alpha))
+    if num_colors > 0:
+        _parse_palette_image(num_colors, width, height, remaining, out)
+
+    else:
+        _parse_standard_image(width, height, remaining, out)

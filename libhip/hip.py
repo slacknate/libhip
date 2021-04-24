@@ -10,7 +10,7 @@ RAW_A_SIZE = 1
 RAW_RGB_SIZE = 3
 
 HIP_PAL_IMG_CHUNK_SIZE = 2
-HIP_STD_IMG_CHUNK_SIZE = 5
+HIP_RAW_IMG_CHUNK_SIZE = 5
 
 HIP_FILE_SIZE_INDEX = 1
 HIP_NUM_COLORS_INDEX = 2
@@ -18,8 +18,8 @@ HIP_NUM_COLORS_INDEX = 2
 HIP_PAL_IMG_WIDTH_INDEX = 0
 HIP_PAL_IMG_HEIGHT_INDEX = 1
 
-HIP_STD_IMG_WIDTH_INDEX = 3
-HIP_STD_IMG_HEIGHT_INDEX = 4
+HIP_RAW_IMG_WIDTH_INDEX = 3
+HIP_RAW_IMG_HEIGHT_INDEX = 4
 
 
 def _unpack_from(fmt, data):
@@ -61,8 +61,8 @@ def _parse_header(hip_contents):
 
     # Otherwise this HIP file describes raw RGBA pixel data and we have no palette.
     else:
-        width = header[HIP_STD_IMG_WIDTH_INDEX]
-        height = header[HIP_STD_IMG_HEIGHT_INDEX]
+        width = header[HIP_RAW_IMG_WIDTH_INDEX]
+        height = header[HIP_RAW_IMG_HEIGHT_INDEX]
 
     return num_colors, width, height, remaining
 
@@ -155,7 +155,7 @@ def _parse_palette_image(num_colors, width, height, remaining, out):
         image_fp.save(out, format="PNG", transparency=bytes(alpha))
 
 
-def _parse_standard_image_data(width, height, hip_contents):
+def _parse_raw_image_data(width, height, hip_contents):
     """
     Parse the raw RGBA image data from our HIP file.
     """
@@ -167,21 +167,21 @@ def _parse_standard_image_data(width, height, hip_contents):
     data = []
 
     while True:
-        chunk_offset = chunk_index * HIP_STD_IMG_CHUNK_SIZE
+        chunk_offset = chunk_index * HIP_RAW_IMG_CHUNK_SIZE
 
         # Read our color data in 5 byte chunks.
         # The data contains the color and number of pixels to render which are that color.
-        color_data = hip_contents[chunk_offset:chunk_offset+HIP_STD_IMG_CHUNK_SIZE]
+        color_data = hip_contents[chunk_offset:chunk_offset+HIP_RAW_IMG_CHUNK_SIZE]
 
         # If the color data chunk is empty then we have parsed the full image.
         if not color_data:
             break
 
-        # Note that HIP standard image files store there color data in the format BGRA.
+        # Note that HIP raw image files store there color data in the format BGRA.
         bgr = color_data[:RAW_RGB_SIZE]
         a = color_data[RAW_RGB_SIZE:RAW_RGB_SIZE+RAW_A_SIZE]
         # The last byte of the chunk is the number of pixels that is the given color.
-        num_pixels = color_data[HIP_STD_IMG_CHUNK_SIZE-1]
+        num_pixels = color_data[HIP_RAW_IMG_CHUNK_SIZE-1]
 
         # Convert our color from BGRA to RGBA.
         rgba = tuple(bgr[::-1] + a)
@@ -197,11 +197,11 @@ def _parse_standard_image_data(width, height, hip_contents):
     return data
 
 
-def _parse_standard_image(width, height, hip_contents, out):
+def _parse_raw_image(width, height, hip_contents, out):
     """
     Parse a HIP image that represents a PNG RGBA image.
     """
-    image_data = _parse_standard_image_data(width, height, hip_contents)
+    image_data = _parse_raw_image_data(width, height, hip_contents)
 
     with Image.new("RGBA", (width, height)) as image_fp:
         image_fp.putdata(image_data)
@@ -239,4 +239,4 @@ def hip_to_png(hip_image, out=None):
         _parse_palette_image(num_colors, width, height, remaining, out)
 
     else:
-        _parse_standard_image(width, height, remaining, out)
+        _parse_raw_image(width, height, remaining, out)

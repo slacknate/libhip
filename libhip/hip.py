@@ -141,20 +141,27 @@ def _parse_palette_image(num_colors, width, height, remaining, out):
         image_fp.save(out, format="PNG", transparency=bytes(alpha))
 
 
-def _parse_standard_image_data(hip_contents):
+def _parse_standard_image_data(width, height, hip_contents):
     """
     Parse the raw RGBA image data from our HIP file.
     """
-    remaining = hip_contents
+    total_pixels = width * height
+    chunk_index = 0
 
     # We are parsing raw RGBA data. PIL expects RGBA images to provide
     # pixel data to the Image.putdata() method as RGBA tuples.
     data = []
 
-    while remaining:
+    while True:
+        chunk_offset = chunk_index * HIP_STD_IMG_CHUNK_SIZE
+
         # Read our color data in 5 byte chunks.
         # The data contains the color and number of pixels to render which are that color.
-        color_data = remaining[:HIP_STD_IMG_CHUNK_SIZE]
+        color_data = hip_contents[chunk_offset:chunk_offset+HIP_STD_IMG_CHUNK_SIZE]
+
+        # If the color data chunk is empty then we have parsed the full image.
+        if not color_data:
+            break
 
         # Note that HIP standard image files store there color data in the format BGRA.
         bgr = color_data[:RAW_RGB_SIZE]
@@ -168,7 +175,10 @@ def _parse_standard_image_data(hip_contents):
         # Extend our data with the number of pixels that are the given color.
         data.extend([rgba] * num_pixels)
 
-        remaining = remaining[HIP_STD_IMG_CHUNK_SIZE:]
+        chunk_index += 1
+
+    if len(data) != total_pixels:
+        raise ValueError("Image data length mismatch!")
 
     return data
 
@@ -177,7 +187,7 @@ def _parse_standard_image(width, height, hip_contents, out):
     """
     Parse a HIP image that represents a PNG RGBA image.
     """
-    image_data = _parse_standard_image_data(hip_contents)
+    image_data = _parse_standard_image_data(width, height, hip_contents)
 
     with Image.new("RGBA", (width, height)) as image_fp:
         image_fp.putdata(image_data)

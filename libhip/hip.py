@@ -152,7 +152,8 @@ def _parse_standard_image_data(hip_contents):
     data = []
 
     while remaining:
-        # ???.
+        # Read our color data in 5 byte chunks.
+        # The data contains the color and number of pixels to render which are that color.
         color_data = remaining[:HIP_STD_IMG_CHUNK_SIZE]
 
         # Note that HIP standard image files store there color data in the format BGRA.

@@ -34,7 +34,7 @@ REF_RAW_PNG = os.path.join(TEST_DIRECTORY, "ref_raw.png")
 REF_RAW_PNG_DATA = read_file(REF_RAW_PNG)
 
 
-class HPLPaletteTests(unittest.TestCase):
+class HIPImageTests(unittest.TestCase):
     def test_hip_to_png_palette(self):
         with test_file("hip_to_png_pal.png") as hip_to_png_pal:
             hip_to_png(SRC_PAL_HIP, out=hip_to_png_pal)

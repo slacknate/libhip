@@ -2,7 +2,7 @@ import os
 import unittest
 import contextlib
 
-from libhip.hip import hip_to_png
+from libhip.hip import hip_to_png, png_to_hip
 
 TEST_DIRECTORY = os.path.abspath(os.path.dirname(__file__))
 
@@ -24,12 +24,18 @@ def read_file(file_name):
 
 
 SRC_PAL_HIP = os.path.join(TEST_DIRECTORY, "src_pal.hip")
+SRC_PAL_PNG = os.path.join(TEST_DIRECTORY, "src_pal.png")
 
+REF_PAL_HIP = os.path.join(TEST_DIRECTORY, "ref_pal.hip")
+REF_PAL_HIP_DATA = read_file(REF_PAL_HIP)
 REF_PAL_PNG = os.path.join(TEST_DIRECTORY, "ref_pal.png")
 REF_PAL_PNG_DATA = read_file(REF_PAL_PNG)
 
 SRC_RAW_HIP = os.path.join(TEST_DIRECTORY, "src_raw.hip")
+SRC_RAW_PNG = os.path.join(TEST_DIRECTORY, "src_raw.png")
 
+REF_RAW_HIP = os.path.join(TEST_DIRECTORY, "ref_raw.hip")
+REF_RAW_HIP_DATA = read_file(REF_RAW_HIP)
 REF_RAW_PNG = os.path.join(TEST_DIRECTORY, "ref_raw.png")
 REF_RAW_PNG_DATA = read_file(REF_RAW_PNG)
 
@@ -46,3 +52,15 @@ class HIPImageTests(unittest.TestCase):
             hip_to_png(SRC_RAW_HIP, out=hip_to_png_raw)
             hip_to_png_raw_data = read_file(hip_to_png_raw)
             self.assertEqual(hip_to_png_raw_data, REF_RAW_PNG_DATA)
+
+    def test_png_palette_to_hip(self):
+        with test_file("png_pal_to_hip.png") as png_palette_to_hip:
+            png_to_hip(SRC_PAL_PNG, out=png_palette_to_hip)
+            png_pal_to_hip_data = read_file(png_palette_to_hip)
+            self.assertEqual(png_pal_to_hip_data, REF_PAL_HIP_DATA)
+
+    def test_png_raw_to_hip(self):
+        with test_file("png_raw_to_hip.png") as png_raw_to_hip:
+            png_to_hip(SRC_RAW_PNG, out=png_raw_to_hip)
+            png_raw_to_hip_data = read_file(png_raw_to_hip)
+            self.assertEqual(png_raw_to_hip_data, REF_RAW_HIP_DATA)

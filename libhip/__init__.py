@@ -1,1 +1,1 @@
-from .hip import hip_to_png
+from .hip import HIPImage

@@ -115,17 +115,27 @@ def _parse_palette(num_colors, hip_contents):
     palette_data = bytearray()
     alpha_data = bytearray()
 
-    remaining = hip_contents[:palette_size]
+    palette_index = 0
+    palette = hip_contents[:palette_size]
 
-    while remaining:
-        bgr = remaining[:RAW_RGB_SIZE]
-        remaining = remaining[RAW_RGB_SIZE:]
+    while True:
+        palette_offset = palette_index * (RAW_RGB_SIZE + RAW_A_SIZE)
 
-        alpha = remaining[:RAW_A_SIZE]
-        remaining = remaining[RAW_A_SIZE:]
+        bgr = palette[palette_offset:palette_offset+RAW_RGB_SIZE]
+        a = palette[palette_offset+RAW_RGB_SIZE:palette_offset+RAW_RGB_SIZE+RAW_A_SIZE]
+
+        # If there is no remaining palette data from the source then we are done.
+        if not bgr and not a:
+            break
+
+        # Check to ensure we have not de-synced during the parse process.
+        if bool(bgr) != bool(a):
+            raise ValueError("Mismatch between RGB and transparency data!")
 
         palette_data += bgr
-        alpha_data += alpha
+        alpha_data += a
+
+        palette_index += 1
 
     if len(palette_data) != len(alpha_data) * (RAW_RGB_SIZE / RAW_A_SIZE):
         raise ValueError("Mismatch between RGB and transparency data!")
@@ -157,6 +167,8 @@ def _parse_palette_image_data(width, height, num_colors, hip_contents):
         if not color_data:
             break
 
+        assert len(color_data) == HIP_PAL_IMG_CHUNK_SIZE
+
         # Color palette index we are currently working with.
         # We subtract our "palette index" from the number of colors as we transposed the palette
         # as it exists in the HIP file so it is compatible with HPL files.
@@ -177,21 +189,6 @@ def _parse_palette_image_data(width, height, num_colors, hip_contents):
     return data
 
 
-def _parse_palette_image(num_colors, width, height, remaining, out):
-    """
-    Parse a HIP image that represents a PNG palette image.
-    """
-    palette, alpha, remaining = _parse_palette(num_colors, remaining)
-    image_data = _parse_palette_image_data(width, height, num_colors, remaining)
-
-    with Image.new("P", (width, height)) as image_fp:
-        image_fp.putpalette(palette)
-        image_fp.putdata(image_data)
-        # Setting the transparency kwarg to our alpha raw data creates a tRNS header.
-        # The kwarg expects an instance of `bytes()`.
-        image_fp.save(out, format="PNG", transparency=bytes(alpha))
-
-
 def _parse_raw_image_data(width, height, hip_contents):
     """
     Parse the raw RGBA image data from our HIP file.
@@ -199,9 +196,7 @@ def _parse_raw_image_data(width, height, hip_contents):
     total_pixels = width * height
     chunk_index = 0
 
-    # We are parsing raw RGBA data. PIL expects RGBA images to provide
-    # pixel data to the Image.putdata() method as RGBA tuples.
-    data = []
+    image = bytearray()
 
     while True:
         chunk_offset = chunk_index * HIP_RAW_IMG_CHUNK_SIZE
@@ -214,6 +209,8 @@ def _parse_raw_image_data(width, height, hip_contents):
         if not color_data:
             break
 
+        assert len(color_data) == HIP_RAW_IMG_CHUNK_SIZE
+
         # Note that HIP raw image files store there color data in the format BGRA.
         bgr = color_data[:RAW_RGB_SIZE]
         a = color_data[RAW_RGB_SIZE:RAW_RGB_SIZE+RAW_A_SIZE]
@@ -224,40 +221,23 @@ def _parse_raw_image_data(width, height, hip_contents):
         rgba = tuple(bgr[::-1] + a)
 
         # Extend our data with the number of pixels that are the given color.
-        data.extend([rgba] * num_pixels)
+        image += bytearray(rgba * num_pixels)
 
         chunk_index += 1
 
-    if len(data) != total_pixels:
+    if len(image) // (RAW_RGB_SIZE + RAW_A_SIZE) != total_pixels:
         raise ValueError("Image data length mismatch!")
 
-    return data
+    return image
 
 
-def _parse_raw_image(width, height, hip_contents, out):
+def _load_hip(hip_image):
     """
-    Parse a HIP image that represents a PNG RGBA image.
-    """
-    image_data = _parse_raw_image_data(width, height, hip_contents)
-
-    with Image.new("RGBA", (width, height)) as image_fp:
-        image_fp.putdata(image_data)
-        image_fp.save(out, format="PNG")
-
-
-def hip_to_png(hip_image, out=None):
-    """
-    Extract an image from a HIP file and save it as a PNG image.
-    The resultant image may be a palette image or a raw RGBA image as HIP images could be either.
+    Extract an image from a HIP file and return the palette (if it exists) and image data.
+    The provided image may be a palette image or a raw RGBA image as HIP images could be either.
 
     Reference: https://github.com/dantarion/bbtools/blob/master/extractHip.py
     """
-    if out is None:
-        if not isinstance(hip_image, str):
-            raise ValueError("Must provide an output path or fp when not supplying HIP image via file path!")
-
-        out = hip_image.replace(".hip", ".png")
-
     if isinstance(hip_image, str) and os.path.exists(hip_image):
         with open(hip_image, "rb") as hip_fp:
             hip_contents = hip_fp.read()
@@ -274,10 +254,15 @@ def hip_to_png(hip_image, out=None):
     num_colors, width, height, remaining = _parse_header(hip_contents)
 
     if num_colors > 0:
-        _parse_palette_image(num_colors, width, height, remaining, out)
+        palette, alpha, remaining = _parse_palette(num_colors, remaining)
+        image = _parse_palette_image_data(width, height, num_colors, remaining)
 
     else:
-        _parse_raw_image(width, height, remaining, out)
+        alpha = bytearray()
+        palette = bytearray()
+        image = _parse_raw_image_data(width, height, remaining)
+
+    return (width, height), image, palette, alpha
 
 
 def _build_header(image_dimensions, image_type, image_data_size, palette_data_size=0):
@@ -384,29 +369,6 @@ def _build_palette_image(image_data):
     return hip_image_data
 
 
-def _save_palette_image(image_fp, out):
-    """
-    Build a HIP palette image and write it out to the given destination.
-    """
-    # Get image size.
-    size = image_fp.size
-    # Get image data.
-    image = bytearray(image_fp.getdata())
-    # Get color information from the palette.
-    palette_data = bytearray(image_fp.getdata().getpalette())
-    # Get transparency information from the tRNS header.
-    alpha = bytearray(image_fp.info["transparency"])
-
-    hip_palette_data = _build_palette(palette_data, alpha)
-    hip_image_data = _build_palette_image(image)
-    header = _build_header(size, PALETTE_IMAGE_TYPE, len(hip_image_data), palette_data_size=len(hip_palette_data))
-
-    with output_image(out) as out_fp:
-        out_fp.write(header)
-        out_fp.write(hip_palette_data)
-        out_fp.write(hip_image_data)
-
-
 def _build_raw_image(image_data):
     """
     Build HIP palette image data.
@@ -417,10 +379,21 @@ def _build_raw_image(image_data):
     current_color = b""
     hip_image_data = bytearray()
 
-    # Pillow presents the image data of a raw RGBA PNG image as color tuples.
-    for color_data in image_data:
+    while True:
+        pixel_offset = pixel_index * (RAW_RGB_SIZE + RAW_A_SIZE)
+        color_data = image_data[pixel_offset:pixel_offset+RAW_RGB_SIZE+RAW_A_SIZE]
+
         bgr = color_data[:RAW_RGB_SIZE][::-1]
         a = color_data[RAW_RGB_SIZE:RAW_RGB_SIZE+RAW_A_SIZE]
+
+        # If there is no remaining palette data from the source then we are done.
+        if not bgr and not a:
+            break
+
+        # Check to ensure we have not de-synced during the parse process.
+        if bool(bgr) != bool(a):
+            raise ValueError("Mismatch between RGB and transparency data!")
+
         color = bgr + a
 
         if (color != current_color and count > 0) or count >= MAX_BYTE_VALUE:
@@ -437,42 +410,182 @@ def _build_raw_image(image_data):
     return hip_image_data
 
 
-def _save_raw_image(image_fp, out):
+def _save_hip(image_size, image, palette, alpha, out):
     """
-    Build a HIP raw image and write it out to the given destination.
+    Create a HIP image from the provided image and palette data.
+    Note that the image format is slightly different based on the presence of palette data.
+    """
+    # If palette data exists we are saving a palette image.
+    if palette and alpha:
+        hip_palette_data = _build_palette(palette, alpha)
+        hip_image_data = _build_palette_image(image)
+        header = _build_header(image_size, PALETTE_IMAGE_TYPE, len(hip_image_data), len(hip_palette_data))
+
+        with output_image(out) as out_fp:
+            out_fp.write(header)
+            out_fp.write(hip_palette_data)
+            out_fp.write(hip_image_data)
+
+    # Otherwise we are working with a raw RGBA image.
+    elif not palette and not alpha:
+        hip_image_data = _build_raw_image(image)
+        header = _build_header(image_size, RAW_IMAGE_TYPE, len(hip_image_data))
+
+        with output_image(out) as out_fp:
+            out_fp.write(header)
+            out_fp.write(hip_image_data)
+
+    else:
+        raise TypeError("Unsupported image type!")
+
+
+def _load_palette_png(image_fp):
+    """
+    Read a PNG palette image and return the data we need from it to create a HIP image.
     """
     # Get image size.
     size = image_fp.size
     # Get image data.
-    image = image_fp.getdata()
+    image = bytearray(image_fp.getdata())
+    # Get color information from the palette.
+    palette_data = bytearray(image_fp.getdata().getpalette())
+    # Get transparency information from the tRNS header.
+    alpha = bytearray(image_fp.info["transparency"])
 
-    hip_image_data = _build_raw_image(image)
-    header = _build_header(size, RAW_IMAGE_TYPE, len(hip_image_data))
-
-    with output_image(out) as out_fp:
-        out_fp.write(header)
-        out_fp.write(hip_image_data)
+    return size, image, palette_data, alpha
 
 
-def png_to_hip(png_image, out=None):
+def _load_raw_png(image_fp):
     """
-    Convert a PNG image to an equivalent HIP image.
-    Can take a palette image or a raw RGBA image as input.
+    Read a raw RGBA PNG image and return the data we need from it to create a HIP image.
     """
-    if out is None:
-        if not isinstance(png_image, str):
-            raise ValueError("Must provide an output path or fp when not supplying PNG image via file path!")
+    # Get image size.
+    size = image_fp.size
+    # Get image data.
+    image_raw = image_fp.getdata()
 
-        out = png_image.replace(".png", ".hip")
+    image = bytearray()
 
+    # Pillow presents the image data of a raw RGBA PNG image as color tuples.
+    for color_data in image_raw:
+        image += bytearray(color_data)
+
+    return size, image
+
+
+def _load_png(png_image):
+    """
+    Load a PNG image, determine the image type, and read the data we
+    need in order to create other images from this source image.
+    """
     with Image.open(png_image) as image_fp:
         image_type = image_fp.mode
 
         if image_type == PALETTE_IMAGE_TYPE:
-            _save_palette_image(image_fp, out)
+            size, image, palette_data, alpha = _load_palette_png(image_fp)
 
         elif image_type == RAW_IMAGE_TYPE:
-            _save_raw_image(image_fp, out)
+            alpha = bytearray()
+            palette_data = bytearray()
+            size, image = _load_raw_png(image_fp)
 
         else:
-            raise ValueError(f"Unknown image type {image_type}!")
+            raise TypeError(f"Unknown image type {image_type}!")
+
+        return size, image, palette_data, alpha
+
+
+def _save_palette_png(image_size, image, palette, alpha, out):
+    """
+    Helper to create a PNG palette image from an image size, pixel data, and palette data.
+    """
+    with Image.new(PALETTE_IMAGE_TYPE, image_size) as image_fp:
+        image_fp.putpalette(palette)
+        image_fp.putdata(image)
+        # Setting the transparency kwarg to our alpha raw data creates a tRNS header.
+        # The kwarg expects an instance of `bytes()`.
+        image_fp.save(out, format="PNG", transparency=bytes(alpha))
+
+
+def _save_raw_png(image_size, image_data, out):
+    """
+    Helper to create a raw RGBA PNG image from an image size and pixel data.
+    """
+    image = []
+    pixel_index = 0
+
+    # Pillow expects raw RGBA image data as an iterable of RGBA tuples.
+    while True:
+        pixel_offset = pixel_index * (RAW_RGB_SIZE + RAW_A_SIZE)
+
+        rgba = image_data[pixel_offset:pixel_offset+RAW_RGB_SIZE+RAW_A_SIZE]
+
+        # If there is no remaining palette data from the source then we are done.
+        if not rgba:
+            break
+
+        assert len(rgba) == (RAW_RGB_SIZE + RAW_A_SIZE)
+
+        image.append(tuple(rgba))
+        pixel_index += 1
+
+    with Image.new(RAW_IMAGE_TYPE, image_size) as image_fp:
+        image_fp.putdata(image)
+        image_fp.save(out, format="PNG")
+
+
+def _save_png(image_size, image, palette, alpha, out):
+    """
+    Save a PNG from the given image and palette data.
+    Note that we create different image types based on the presence of palette data.
+    """
+    # If palette data exists we are saving a palette image.
+    if palette and alpha:
+        _save_palette_png(image_size, image, palette, alpha, out)
+
+    # Otherwise we are working with a raw RGBA image.
+    elif not palette and not alpha:
+        _save_raw_png(image_size, image, out)
+
+    else:
+        raise TypeError("Unsupported image type!")
+
+
+class HIPImage:
+    def __init__(self):
+        self.image_size = (0, 0)
+        self.image = bytearray()
+        self.palette = bytearray()
+        self.alpha = bytearray()
+
+    def load_hip(self, hip_input):
+        """
+        Load a HIP image and retain all information about it.
+        If this image is a raw RGBA image then the palette/alpha data will both be empty.
+        """
+        self.image_size, self.image, self.palette, self.alpha = _load_hip(hip_input)
+
+    def save_hip(self, hip_output):
+        """
+        Save a previously loaded image as a HIP image.
+        """
+        if not self.image:
+            raise ValueError("No image has been loaded!")
+
+        _save_hip(self.image_size, self.image, self.palette, self.alpha, hip_output)
+
+    def load_png(self, png_input):
+        """
+        Load a PNG image and retain all information about it.
+        If this image is a raw RGBA image then the palette/alpha data will both be empty.
+        """
+        self.image_size, self.image, self.palette, self.alpha = _load_png(png_input)
+
+    def save_png(self, png_output):
+        """
+        Save a previously loaded image as a PNG image.
+        """
+        if not self.image:
+            raise ValueError("No image has been loaded!")
+
+        _save_png(self.image_size, self.image, self.palette, self.alpha, png_output)

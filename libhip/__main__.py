@@ -1,7 +1,19 @@
 import os
 import argparse
 
-from .hip import hip_to_png, png_to_hip
+from .hip import HIPImage
+
+
+def hip_to_png(hip_path):
+    image = HIPImage()
+    image.load_hip(hip_path)
+    image.save_png(hip_path.replace(".hip", ".png"))
+
+
+def png_to_hip(png_path):
+    image = HIPImage()
+    image.load_png(png_path)
+    image.save_hip(png_path.replace(".png", ".hip"))
 
 
 def abs_path(value):

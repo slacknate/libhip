@@ -558,6 +558,12 @@ class HIPImage:
         self.palette = bytearray()
         self.alpha = bytearray()
 
+    def is_palette_image(self):
+        """
+        Helper method to return whether or not this image represents a PNG palette image or not.
+        """
+        return bool(self.palette) and bool(self.alpha)
+
     def load_hip(self, hip_input):
         """
         Load a HIP image and retain all information about it.

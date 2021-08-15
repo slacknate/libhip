@@ -25,6 +25,8 @@ HIP_NUM_COLORS_INDEX = 2
 
 HIP_PAL_IMG_WIDTH_INDEX = 0
 HIP_PAL_IMG_HEIGHT_INDEX = 1
+HIP_PAL_X_OFFSET_INDEX = 2
+HIP_PAL_Y_OFFSET_INDEX = 3
 
 HIP_RAW_IMG_WIDTH_INDEX = 3
 HIP_RAW_IMG_HEIGHT_INDEX = 4
@@ -71,12 +73,15 @@ def _parse_header(hip_contents):
     """
     Parse the header of a HIP file.
     We do basic validation of the header with the HIP_PREFIX constant.
+
+    Additional reference:
+    https://github.com/Labreezy/bb-collision-editor/blob/master/BBCollisionEditor/OverlaidImage.cs
     """
     if not hip_contents.startswith(HIP_PREFIX):
         raise ValueError("Not valid HIP file! Missing HIP file header prefix!")
 
     remaining = hip_contents[len(HIP_PREFIX):]
-    header, remaining = _unpack_from("<IIIIIII", remaining)
+    header, remaining = _unpack_from("<IIIIIbbbbbbbb", remaining)
 
     hip_file_size = header[HIP_FILE_SIZE_INDEX]
     if hip_file_size != len(hip_contents):
@@ -93,15 +98,25 @@ def _parse_header(hip_contents):
             raise ValueError(f"Image contains {num_colors} colors which is less than {HIP_MAX_COLORS}!")
 
         palette_header, remaining = _unpack_from("<IIIIIIII", remaining)
+
+        coord_width = header[HIP_RAW_IMG_WIDTH_INDEX]
+        coord_height = header[HIP_RAW_IMG_HEIGHT_INDEX]
         width = palette_header[HIP_PAL_IMG_WIDTH_INDEX]
         height = palette_header[HIP_PAL_IMG_HEIGHT_INDEX]
+        x_offset = palette_header[HIP_PAL_X_OFFSET_INDEX]
+        y_offset = palette_header[HIP_PAL_Y_OFFSET_INDEX]
 
     # Otherwise this HIP file describes raw RGBA pixel data and we have no palette.
     else:
+        coord_width = 0
+        coord_height = 0
         width = header[HIP_RAW_IMG_WIDTH_INDEX]
         height = header[HIP_RAW_IMG_HEIGHT_INDEX]
+        x_offset = 0
+        y_offset = 0
 
-    return num_colors, width, height, remaining
+    # TODO: we need to retain the unused parts of the header so we can write them back out later if need be.
+    return num_colors, (width, height), (coord_width, coord_height), (x_offset, y_offset), remaining
 
 
 def _parse_palette(num_colors, hip_contents):
@@ -144,10 +159,11 @@ def _parse_palette(num_colors, hip_contents):
     return palette_data[::-1], alpha_data[::-1], hip_contents[palette_size:]
 
 
-def _parse_palette_image_data(width, height, num_colors, hip_contents):
+def _parse_palette_image_data(img_size, num_colors, hip_contents):
     """
     Parse the palette image data of our HIP file.
     """
+    width, height = img_size
     total_pixels = width * height
     chunk_index = 0
 
@@ -189,10 +205,11 @@ def _parse_palette_image_data(width, height, num_colors, hip_contents):
     return data
 
 
-def _parse_raw_image_data(width, height, hip_contents):
+def _parse_raw_image_data(img_size, hip_contents):
     """
     Parse the raw RGBA image data from our HIP file.
     """
+    width, height = img_size
     total_pixels = width * height
     chunk_index = 0
 
@@ -251,18 +268,18 @@ def _load_hip(hip_image):
     else:
         raise TypeError(f"Unsupported HIP image type {hip_image}!")
 
-    num_colors, width, height, remaining = _parse_header(hip_contents)
+    num_colors, img_size, coord_size, img_offset, remaining = _parse_header(hip_contents)
 
     if num_colors > 0:
         palette, alpha, remaining = _parse_palette(num_colors, remaining)
-        image = _parse_palette_image_data(width, height, num_colors, remaining)
+        image = _parse_palette_image_data(img_size, num_colors, remaining)
 
     else:
         alpha = bytearray()
         palette = bytearray()
-        image = _parse_raw_image_data(width, height, remaining)
+        image = _parse_raw_image_data(img_size, remaining)
 
-    return (width, height), image, palette, alpha
+    return img_size, coord_size, img_offset, image, palette, alpha
 
 
 def _build_header(image_dimensions, image_type, image_data_size, palette_data_size=0):
@@ -294,13 +311,13 @@ def _build_header(image_dimensions, image_type, image_data_size, palette_data_si
 
     # Fill in our required prefix and meta data.
     header = HIP_PREFIX
+    # TODO: We need to ensure this features the unused/unknown fields from the header we read.
     header += struct.pack("<IIIIIII", unknown_00, file_size, num_colors, width1, height1, unknown_05, color_depth)
 
     if image_type == PALETTE_IMAGE_TYPE:
         # The aforementioned palette image sub-header that contains the image dimensions.
         width2, height2 = image_dimensions
-        # TODO: We currently pack a bunch of zeros in here but it seems like this should be real data?
-        #       Not even sure it matters but felt a note should be made here in case it does.
+        # TODO: We currently pack a bunch of zeros in here but this should be the data we read from the header.
         header += struct.pack("<IIIIIIII", width2, height2, 0, 0, 0, 0, 0, 0)
 
     return header
@@ -410,10 +427,13 @@ def _build_raw_image(image_data):
     return hip_image_data
 
 
-def _save_hip(image_size, image, palette, alpha, out):
+def _save_hip(image_size, _, __, image, palette, alpha, out):
     """
     Create a HIP image from the provided image and palette data.
     Note that the image format is slightly different based on the presence of palette data.
+
+    TODO: There is definitely some data we are not writing out to the header.
+          See the note at the return statement of _parse_header.
     """
     # If palette data exists we are saving a palette image.
     if palette and alpha:
@@ -554,6 +574,8 @@ def _save_png(image_size, image, palette, alpha, out):
 class HIPImage:
     def __init__(self):
         self.image_size = (0, 0)
+        self.coord_size = (0, 0)
+        self.offset = (0, 0)
         self.image = bytearray()
         self.palette = bytearray()
         self.alpha = bytearray()
@@ -569,7 +591,7 @@ class HIPImage:
         Load a HIP image and retain all information about it.
         If this image is a raw RGBA image then the palette/alpha data will both be empty.
         """
-        self.image_size, self.image, self.palette, self.alpha = _load_hip(hip_input)
+        self.image_size, self.coord_size, self.offset, self.image, self.palette, self.alpha = _load_hip(hip_input)
 
     def save_hip(self, hip_output):
         """
@@ -578,7 +600,7 @@ class HIPImage:
         if not self.image:
             raise ValueError("No image has been loaded!")
 
-        _save_hip(self.image_size, self.image, self.palette, self.alpha, hip_output)
+        _save_hip(self.image_size, self.coord_size, self.offset, self.image, self.palette, self.alpha, hip_output)
 
     def load_png(self, png_input):
         """

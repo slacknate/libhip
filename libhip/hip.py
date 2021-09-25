@@ -571,6 +571,41 @@ def _save_png(image_size, image, palette, alpha, out):
         raise TypeError("Unsupported image type!")
 
 
+@contextlib.contextmanager
+def _open_png(image, image_size, palette, alpha):
+    """
+    Open the given image bytes as a PNG image.
+    We determine the exact image type from the `palette` and `alpha` param values.
+    This way we can open a PNG regardless of whether it is or is not a palette image.
+    We return the pillow image object so we can use it to manipulate the image data.
+    """
+    is_palette = bool(palette) and bool(alpha)
+    image_type = PALETTE_IMAGE_TYPE if is_palette else RAW_IMAGE_TYPE
+
+    with Image.new(image_type, image_size) as image_fp:
+        if is_palette:
+            image_fp.putpalette(palette)
+            image_fp.info["transparency"] = bytes(alpha)  # The transparency must be an instance of `bytes()`.
+
+    image_fp.putdata(image)
+
+    yield image_fp
+
+
+@contextlib.contextmanager
+def _chunk_canvas(image_size, palette, alpha):
+    """
+    Create an image that we can use to derive chunks as defined by game script data.
+    We fill this image with 0xFF as that value is the last palette index, which is used
+    for palette images as the "transparent" color.
+    """
+    num_pixels = image_size[0] * image_size[1]
+    image = b"\xFF" * num_pixels
+
+    with _open_png(image, image_size, palette, alpha) as image_fp:
+        yield image_fp
+
+
 class HIPImage:
     def __init__(self):
         self.image_size = (0, 0)
@@ -617,3 +652,21 @@ class HIPImage:
             raise ValueError("No image has been loaded!")
 
         _save_png(self.image_size, self.image, self.palette, self.alpha, png_output)
+
+    def get_chunk(self, src_x, src_y, src_width, src_height, x, y, layer, **_):
+        """
+        Get a script-defined chunk of this HIP image.
+        Return the location of this chunk in the sprite coordinate system, the
+        chunk layer this chunk is to be rendered at, and the PNG image bytes needed to draw the chunk.
+        """
+        chunk_png = io.BytesIO()
+
+        with _chunk_canvas(self.coord_size, self.palette, self.alpha) as chunk_canvas:
+            with _open_png(self.image, self.image_size, self.palette, self.alpha) as src_png:
+                chunk_canvas.paste(src_png, box=self.offset)
+
+                crop_image = chunk_canvas.crop((src_x, src_y, src_x + src_width, src_y + src_height))
+                crop_image.save(chunk_png, format="PNG")
+                chunk_png.seek(0)
+
+                return (x, y), layer, chunk_png
